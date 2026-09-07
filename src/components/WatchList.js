@@ -15,7 +15,7 @@ const WatchList = () => {
 
  useEffect(() => {
   let isActive = true;
-  const ws = new WebSocket("ws://localhost:3002");
+  const ws = new WebSocket("wss://zerodha-backend-o227.onrender.com");
 
   ws.onopen = () => {
     if (!isActive) return;

@@ -14,7 +14,7 @@ const BuyActionWindow = ({ uid }) => {
     console.log("Sending UID to backend:", uid);
     
     try {
-      await axios.post("http://localhost:3002/newOrder", {
+      axios.post("https://zerodha-backend-o227.onrender.com/newOrder", {
         name: uid,
         qty: stockQuantity,
         price: stockPrice,
