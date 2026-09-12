@@ -10,37 +10,141 @@ import { watchlist as staticWatchlist } from "../data/data";
 import GeneralContext from "./GeneralContext";
 import { DoughnutChart } from "./DoughnoutChart";
 
+const BACKEND_URL = "https://zerodha-backend-o227.onrender.com";
+
+const getWebSocketUrl = () => {
+  if (window.location.hostname === "localhost") {
+    return "ws://localhost:3002";
+  }
+
+  if (window.location.protocol === "https:") {
+    return BACKEND_URL.replace("https://", "wss://");
+  }
+
+  return BACKEND_URL.replace("https://", "ws://");
+};
+
 const WatchList = () => {
   const [liveWatchlist, setLiveWatchlist] = useState(staticWatchlist);
 
- useEffect(() => {
-  let isActive = true;
-  const ws = new WebSocket("wss://zerodha-backend-o227.onrender.com");
+  useEffect(() => {
+    let socket;
+    let reconnectTimer;
+    let isMounted = true;
 
-  ws.onopen = () => {
-    if (!isActive) return;
-    const symbols = staticWatchlist.map((stock) => stock.name);
-    ws.send(JSON.stringify({ type: "watchlist", symbols }));
-  };
+    const connectSocket = () => {
+      try {
+        socket = new WebSocket(getWebSocketUrl());
 
-  ws.onmessage = (event) => {
-    if (!isActive) return;
-    const livePrices = JSON.parse(event.data);
-    setLiveWatchlist((prev) =>
-      prev.map((stock) => {
-        const updated = livePrices.find((p) => p.name === stock.name);
-        return updated ? { ...stock, ...updated } : stock;
-      })
-    );
-  };
+        socket.onopen = () => {
+          console.log("Live price WebSocket connected");
 
-  ws.onerror = (err) => console.error("WebSocket error:", err);
+          const symbols = staticWatchlist
+            .map((stock) => stock.name)
+            .filter(Boolean);
 
-  return () => {
-    isActive = false;
-    ws.close();
-  };
-}, []);
+          socket.send(
+            JSON.stringify({
+              type: "subscribe",
+              symbols,
+            })
+          );
+        };
+
+        socket.onmessage = (event) => {
+          try {
+            const message = JSON.parse(event.data);
+
+            if (message.type !== "prices") {
+              return;
+            }
+
+            const livePrices = Array.isArray(message.data)
+              ? message.data
+              : [];
+
+            if (!isMounted) return;
+
+            setLiveWatchlist((prev) =>
+              prev.map((stock) => {
+                const updated = livePrices.find(
+                  (price) =>
+                    String(price.symbol || "").toUpperCase() ===
+                    String(stock.name || "").toUpperCase()
+                );
+
+                if (!updated) {
+                  return stock;
+                }
+
+                return {
+                  ...stock,
+
+                  // Live LTP
+                  price: updated.price ?? stock.price,
+
+                  // Existing UI percentage field
+                  percent:
+                    updated.day ??
+                    `${Number(updated.changePercent || 0).toFixed(2)}%`,
+
+                  // Existing UI direction field
+                  isDown:
+                    updated.isLoss ??
+                    Number(updated.changePercent || 0) < 0,
+
+                  // Extra live values
+                  change: updated.change ?? stock.change,
+                  changePercent:
+                    updated.changePercent ?? stock.changePercent,
+                  ltp: updated.ltp ?? updated.price ?? stock.ltp,
+                };
+              })
+            );
+          } catch (error) {
+            console.error("Invalid live price message:", error);
+          }
+        };
+
+        socket.onerror = (error) => {
+          console.error("Live price WebSocket error:", error);
+        };
+
+        socket.onclose = () => {
+          console.log("Live price WebSocket disconnected");
+
+          if (!isMounted) return;
+
+          // Automatically reconnect after 3 seconds
+          reconnectTimer = setTimeout(() => {
+            connectSocket();
+          }, 3000);
+        };
+      } catch (error) {
+        console.error("WebSocket connection error:", error);
+
+        reconnectTimer = setTimeout(() => {
+          if (isMounted) {
+            connectSocket();
+          }
+        }, 3000);
+      }
+    };
+
+    connectSocket();
+
+    return () => {
+      isMounted = false;
+
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+      }
+
+      if (socket) {
+        socket.close();
+      }
+    };
+  }, []);
 
   const labels = liveWatchlist.map((subArray) => subArray["name"]);
 
@@ -86,7 +190,12 @@ const WatchList = () => {
 
       <ul className="list">
         {liveWatchlist.map((stock, index) => {
-          return <WatchListItem stock={stock} key={index} />;
+          return (
+            <WatchListItem
+              stock={stock}
+              key={stock.name || index}
+            />
+          );
         })}
       </ul>
 
@@ -98,39 +207,46 @@ const WatchList = () => {
 const WatchListItem = ({ stock }) => {
   const [showWatchlistActions, setShowWatchlistActions] = useState(false);
 
-  const handleMouseEnter = (e) => {
-    setShowWatchlistActions(true);
-  };
-
-  const handleMouseLeave = (e) => {
-    setShowWatchlistActions(false);
-  };
-
   return (
-    <li onMouseEnter={handleMouseEnter} onMouseLeave={handleMouseLeave}>
-      <div className={`item ${showWatchlistActions ? "item-hovered" : ""}`}>
-        <p className={stock.isDown ? "down" : "up"}>{stock.name}</p>
+    <li
+      onMouseEnter={() => setShowWatchlistActions(true)}
+      onMouseLeave={() => setShowWatchlistActions(false)}
+    >
+      <div
+        className={`item ${
+          showWatchlistActions ? "item-hovered" : ""
+        }`}
+      >
+        <p className={stock.isDown ? "down" : "up"}>
+          {stock.name}
+        </p>
+
         <div className="item-info">
-          <span className="percent">{stock.percent}</span>
+          <span className="percent">
+            {stock.percent}
+          </span>
+
           {stock.isDown ? (
             <KeyboardArrowDown className="down" />
           ) : (
             <KeyboardArrowUp className="up" />
           )}
-          <span className="price">{stock.price}</span>
+
+          <span className="price">
+            {stock.price}
+          </span>
         </div>
       </div>
-      {showWatchlistActions && <WatchListActions uid={stock.name} />}
+
+      {showWatchlistActions && (
+        <WatchListActions uid={stock.name} />
+      )}
     </li>
   );
 };
 
 const WatchListActions = ({ uid }) => {
   const { openBuyWindow } = useContext(GeneralContext);
-
-  const handleBuyClick = () => {
-    openBuyWindow(uid);
-  };
 
   return (
     <span className="actions">
@@ -141,18 +257,25 @@ const WatchListActions = ({ uid }) => {
           arrow
           TransitionComponent={Grow}
         >
-          <button className="buy" onClick={handleBuyClick}>
+          <button
+            className="buy"
+            onClick={() => openBuyWindow(uid)}
+          >
             Buy
           </button>
         </Tooltip>
+
         <Tooltip
           title="Sell (S)"
           placement="top"
           arrow
           TransitionComponent={Grow}
         >
-          <button className="sell">Sell</button>
+          <button className="sell">
+            Sell
+          </button>
         </Tooltip>
+
         <Tooltip
           title="Analytics (A)"
           placement="top"
@@ -163,7 +286,13 @@ const WatchListActions = ({ uid }) => {
             <BarChartOutlined className="icon" />
           </button>
         </Tooltip>
-        <Tooltip title="More" placement="top" arrow TransitionComponent={Grow}>
+
+        <Tooltip
+          title="More"
+          placement="top"
+          arrow
+          TransitionComponent={Grow}
+        >
           <button className="action">
             <MoreHoriz className="icon" />
           </button>
